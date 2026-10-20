@@ -235,6 +235,7 @@ main {
     <label for="apiKey">AFDC API key
       <input id="apiKey" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="DEMO_KEY">
     </label>
+    <p>Shortcut: open the app once with your key in the link, like <code>…/Zero-charge/?key=YOURKEY</code>, and it is saved here automatically.</p>
     <p>Station data comes from the U.S. Department of Energy's <b>Alternative Fuels Data Center</b> (covers the US and Canada). The shared <code>DEMO_KEY</code> allows a few dozen lookups per hour. If you see a rate-limit error, get a free key in about a minute at <a href="https://developer.nrel.gov/signup/" target="_blank" rel="noopener">developer.nrel.gov/signup</a> and paste it here. The key is stored only on this phone.</p>
 
     <h2>What counts as free</h2>
@@ -264,10 +265,23 @@ main {
     set: function (k, v) { try { localStorage.setItem('zc.' + k, JSON.stringify(v)); } catch (e) {} }
   };
 
+  // Optional built-in key. Leave empty to use NREL's shared DEMO_KEY until a personal key is set.
+  var DEFAULT_KEY = '';
+
+  // A key in the link (?key=XXXX) is saved on this device once, then removed from the address bar.
+  try {
+    var qs = new URLSearchParams(location.search), urlKey = (qs.get('key') || '').trim();
+    if (urlKey) {
+      store.set('apiKey', urlKey);
+      qs.delete('key');
+      history.replaceState(null, '', location.pathname + (qs.toString() ? '?' + qs : '') + location.hash);
+    }
+  } catch (e) {}
+
   var state = {
     loc: store.get('loc', null),            // {lat, lon, label}
     radius: store.get('radius', 25),
-    apiKey: store.get('apiKey', ''),
+    apiKey: store.get('apiKey', DEFAULT_KEY),
     power: 'any',
     plugs: store.get('plugs', { j1772: true, ccs: true, tesla: false, nema: false }),
     showUnknown: false,
@@ -442,7 +456,7 @@ main {
   var inflight = null;
   function fetchStations() {
     if (!state.loc) return;
-    var key = (state.apiKey || 'DEMO_KEY').trim();
+    var key = (state.apiKey || DEFAULT_KEY || 'DEMO_KEY').trim();
     var url = 'https://developer.nrel.gov/api/alt-fuel-stations/v1/nearest.json?api_key=' + encodeURIComponent(key) +
       '&fuel_type=ELEC&access=public&status=E&limit=200&radius=' + state.radius +
       '&latitude=' + state.loc.lat + '&longitude=' + state.loc.lon;
