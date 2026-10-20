@@ -455,6 +455,19 @@ main {
   }
 
   // ---------- data ----------
+  // JSONP fallback: the AFDC API wraps its JSON in a callback when asked, which sidesteps a blocked or CORS-less fetch.
+  function jsonp(url, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var cb = 'zc_cb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6), s = document.createElement('script'), done = false;
+      var timer = setTimeout(function () { cleanup(); reject(new Error('timeout')); }, timeoutMs);
+      function cleanup() { done = true; clearTimeout(timer); try { delete window[cb]; } catch (e) { window[cb] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); }
+      window[cb] = function (data) { if (done) return; cleanup(); resolve(data); };
+      s.onerror = function () { if (done) return; cleanup(); reject(new Error('script blocked')); };
+      s.src = url + '&callback=' + cb;
+      document.head.appendChild(s);
+    });
+  }
+
   var inflight = null;
   function fetchStations() {
     if (!state.loc) return;
@@ -462,6 +475,7 @@ main {
     var url = 'https://developer.nrel.gov/api/alt-fuel-stations/v1/nearest.json?api_key=' + encodeURIComponent(key) +
       '&fuel_type=ELEC&access=public&status=E&limit=200&radius=' + state.radius +
       '&latitude=' + state.loc.lat + '&longitude=' + state.loc.lon;
+    var testUrl = 'https://developer.nrel.gov/api/alt-fuel-stations/v1/nearest.json?api_key=DEMO_KEY&fuel_type=ELEC&limit=1&latitude=' + state.loc.lat + '&longitude=' + state.loc.lon;
     setStatus('<span>Looking for chargers within ' + state.radius + ' mi of ' + esc(state.loc.label || 'here') + '…</span>');
     if (inflight) inflight.abort();
     var ctl = inflight = new AbortController();
@@ -470,6 +484,12 @@ main {
       if (r.status === 403) throw new Error('key');
       if (!r.ok) throw new Error('http ' + r.status);
       return r.json();
+    }).catch(function (err) {
+      if (err.name === 'AbortError' || !(err instanceof TypeError)) throw err;
+      return jsonp(url, 15000).then(function (data) {
+        if (data && data.error) throw new Error(/RATE/i.test(data.error.code || '') ? 'rate' : 'key');
+        return data;
+      }).catch(function (e2) { throw new Error(e2.message === 'timeout' || e2.message === 'script blocked' ? 'unreachable' : e2.message); });
     }).then(function (data) {
       if (ctl !== inflight) return;
       var list = data.fuel_stations || [];
@@ -481,9 +501,10 @@ main {
       if (err.name === 'AbortError') return;
       var msg = err.message === 'rate' ? 'Rate limit hit on the shared DEMO_KEY. Add your own free key in Settings.' :
         err.message === 'key' ? 'The API key was rejected. Check it in Settings.' :
+        err.message === 'unreachable' ? 'Your network could not reach developer.nrel.gov. Try cellular instead of Wi-Fi. <a href="' + testUrl + '" target="_blank" rel="noopener">Test the database link</a>.' :
         'Could not reach the charger database (' + esc(err.message) + '). Check your connection.';
       if (state.fetchedAt) { state.stale = true; renderAll(); setStatus($('#status').innerHTML + '<span>' + msg + '</span>', 'stale'); }
-      else { setStatus('<span>' + msg + '</span>', 'err'); renderList([]); }
+      else { setStatus('<span>' + msg + '</span>', 'err'); $('#list').innerHTML = '<div class="empty"><b>Nothing loaded yet.</b> Fix the connection above, then search again or tap the map.</div>'; }
     });
   }
 
