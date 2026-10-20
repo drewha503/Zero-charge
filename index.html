@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Zero Charge">
+<meta name="theme-color" content="#0E8F6E">
+<title>Zero Charge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;800&family=DM+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<style>
+/* Layout: one-screen phone app. Map on top, filter rail, scrolling results. Settings slide up as a sheet. */
+:root {
+  --bg: #EEF3F0;
+  --surface: #FFFFFF;
+  --surface-2: #E1EAE5;
+  --fg: #15231E;
+  --muted: #5B6E66;
+  --line: #CBD8D1;
+  --accent: #0E8F6E;
+  --accent-ink: #FFFFFF;
+  --free: #0E8F6E;
+  --cond: #B7791F;
+  --unknown: #7A8A83;
+  --danger: #B3261E;
+  --stale: #F3E3B0;
+  --stale-fg: #5C4300;
+  --font-ui: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1715; --surface: #17211E; --surface-2: #1F2B27; --fg: #E7EEEA; --muted: #9AAEA6;
+    --line: #2C3B35; --accent: #3DD6A8; --accent-ink: #082018; --free: #3DD6A8; --cond: #E2B04A;
+    --unknown: #8FA19A; --danger: #FF7B72; --stale: #4A3A10; --stale-fg: #FFE6A3; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1715; --surface: #17211E; --surface-2: #1F2B27; --fg: #E7EEEA; --muted: #9AAEA6;
+  --line: #2C3B35; --accent: #3DD6A8; --accent-ink: #082018; --free: #3DD6A8; --cond: #E2B04A;
+  --unknown: #8FA19A; --danger: #FF7B72; --stale: #4A3A10; --stale-fg: #FFE6A3; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font: 500 15px/1.4 var(--font-ui);
+  display: flex; flex-direction: column; overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
+  -webkit-text-size-adjust: 100%;
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header {
+  display: flex; align-items: center; gap: 8px;
+  padding-block: 8px;
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 800; letter-spacing: -0.02em; font-size: 17px; white-space: nowrap; }
+.brand b { color: var(--accent); }
+.search { flex: 1; display: flex; min-width: 0; }
+.search input {
+  flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg);
+  border-radius: 10px 0 0 10px; padding: 8px 10px; font-size: 15px;
+}
+.search input::placeholder { color: var(--muted); }
+.search button {
+  border: 1px solid var(--line); border-left: 0; background: var(--surface-2);
+  border-radius: 0 10px 10px 0; padding: 0 10px; font-weight: 700;
+}
+.iconbtn {
+  border: 1px solid var(--line); background: var(--surface-2); border-radius: 10px;
+  width: 38px; height: 38px; display: grid; place-items: center; flex: none; padding: 0;
+}
+.iconbtn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+#map { height: 42vh; min-height: 220px; background: var(--surface-2); position: relative; flex: none; }
+#map.nomap { display: grid; place-items: center; color: var(--muted); text-align: center; padding: 16px; }
+.leaflet-container { font: inherit; background: var(--surface-2); }
+.leaflet-container a { color: var(--accent); }
+.you-pin { width: 18px; height: 18px; border-radius: 50%; background: #1E6BFF; border: 3px solid #fff; box-shadow: 0 0 0 2px rgba(30,107,255,.35); }
+.pin { width: 26px; height: 26px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 2px solid #fff; box-shadow: 0 2px 4px rgba(0,0,0,.35); display: grid; place-items: center; }
+.pin span { transform: rotate(45deg); font: 700 11px var(--font-mono); color: #fff; }
+.pin.free { background: #0E8F6E; } .pin.cond { background: #B7791F; } .pin.unknown { background: #7A8A83; }
+.pin.dc { width: 32px; height: 32px; }
+.leaflet-popup-content { margin: 10px 12px; font: 500 14px/1.35 var(--font-ui); color: #15231E; }
+
+.rail {
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; flex: none;
+  padding-block: 8px;
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.rail::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px;
+  padding: 5px 11px; font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.chip.sep { border: 0; background: transparent; width: 1px; padding: 0; border-left: 1px solid var(--line); margin: 2px 2px; }
+
+.status {
+  flex: none; font-size: 12.5px; color: var(--muted);
+  padding-block: 6px;
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+}
+.status .count { color: var(--fg); font-weight: 800; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.status.stale { background: var(--stale); color: var(--stale-fg); }
+.status.stale .count { color: var(--stale-fg); }
+.status.err { color: var(--danger); }
+
+main {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding-block: 6px 24px;
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column; gap: 8px;
+}
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; display: grid; grid-template-columns: 1fr auto; gap: 4px 10px;
+  border-left: 4px solid var(--unknown);
+}
+.card.free { border-left-color: var(--free); }
+.card.cond { border-left-color: var(--cond); }
+.card.active { outline: 2px solid var(--accent); }
+.card h3 { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -0.01em; text-wrap: balance; min-width: 0; }
+.dist { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 14px; color: var(--fg); white-space: nowrap; align-self: start; }
+.dist small { color: var(--muted); font-size: 11px; }
+.addr { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
+.price { grid-column: 1 / -1; font-size: 13.5px; }
+.price b { font-weight: 800; }
+.card.free .price b { color: var(--free); }
+.card.cond .price b { color: var(--cond); }
+.card.unknown .price b { color: var(--unknown); }
+.tags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.tag { font-size: 11.5px; font-weight: 700; padding: 2px 7px; border-radius: 6px; background: var(--surface-2); color: var(--fg); font-family: var(--font-mono); letter-spacing: 0.02em; }
+.tag.dc { background: var(--accent); color: var(--accent-ink); }
+.actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 4px; }
+.actions a, .actions button {
+  flex: 1; text-align: center; text-decoration: none; border: 1px solid var(--line); border-radius: 9px;
+  padding: 7px 8px; font-size: 13px; font-weight: 700; background: var(--surface-2); color: var(--fg);
+}
+.actions a.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.meta { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); }
+.empty { text-align: center; color: var(--muted); padding: 32px 16px; max-width: 32ch; margin: 0 auto; }
+.empty b { color: var(--fg); }
+
+.sheet {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: flex-end; z-index: 1000;
+}
+.sheet.open { display: flex; }
+.sheet > div {
+  width: 100%; max-height: 88%; overflow-y: auto; background: var(--surface); border-radius: 16px 16px 0 0;
+  padding-block: 14px calc(20px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 14px;
+}
+.sheet h2 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+.sheet label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.sheet input[type=text], .sheet input[type=password] { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 10px; font-size: 15px; width: 100%; }
+.sheet .row { display: flex; gap: 8px; align-items: center; }
+.sheet .row label { flex-direction: row; align-items: center; gap: 8px; font-size: 14px; color: var(--fg); }
+.sheet p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; max-width: 62ch; }
+.sheet p b { color: var(--fg); }
+.sheet .close { align-self: flex-end; border: 0; background: var(--surface-2); border-radius: 999px; padding: 6px 14px; font-weight: 700; }
+.radios { display: flex; gap: 6px; flex-wrap: wrap; }
+.radios .chip { padding: 6px 12px; }
+.plugs { display: grid; grid-template-columns: 1fr; gap: 6px; font-size: 13px; }
+.plugs div { display: grid; grid-template-columns: 110px 1fr; gap: 8px; }
+.plugs code { font-family: var(--font-mono); font-size: 12px; color: var(--fg); }
+@media (prefers-reduced-motion: no-preference) { .card { transition: outline-color .15s; } }
+@media (min-width: 760px) {
+  body { flex-direction: row; flex-wrap: wrap; }
+  header { width: 100%; }
+  #map { height: auto; flex: 1 1 55%; order: 3; }
+  .rail, .status, main { width: 45%; flex: none; }
+  .rail { order: 1; } .status { order: 2; } main { order: 4; flex: 1 1 auto; height: 0; }
+  .side { display: contents; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Zero<b>Charge</b></div>
+  <form class="search" id="searchForm" autocomplete="off">
+    <input id="q" type="search" placeholder="City, address or ZIP" aria-label="Search a place" enterkeyhint="search">
+    <button type="submit" aria-label="Search">Go</button>
+  </form>
+  <button class="iconbtn" id="locBtn" title="Use my location" aria-label="Use my location">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+  </button>
+  <button class="iconbtn" id="settingsBtn" title="Settings" aria-label="Settings">
+    <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="8" cy="18" r="2" fill="currentColor"/></svg>
+  </button>
+</header>
+
+<div id="map" role="region" aria-label="Map of free chargers"></div>
+
+<div class="rail" role="toolbar" aria-label="Filters">
+  <button class="chip" data-power="any" aria-pressed="true">Any speed</button>
+  <button class="chip" data-power="dc" aria-pressed="false">DC fast</button>
+  <button class="chip" data-power="l2" aria-pressed="false">Level 2</button>
+  <span class="chip sep" aria-hidden="true"></span>
+  <button class="chip" data-plug="j1772" aria-pressed="true">J1772</button>
+  <button class="chip" data-plug="ccs" aria-pressed="true">CCS</button>
+  <button class="chip" data-plug="tesla" aria-pressed="false">Tesla / NACS</button>
+  <button class="chip" data-plug="nema" aria-pressed="false">Outlets</button>
+  <span class="chip sep" aria-hidden="true"></span>
+  <button class="chip" data-unknown="1" aria-pressed="false">Show unknown pricing</button>
+</div>
+
+<div class="status" id="status"><span>Choose a location to begin.</span></div>
+
+<main id="list"></main>
+
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div>
+    <button class="close" id="closeSheet" type="button">Done</button>
+    <h2 id="sheetTitle">Settings</h2>
+
+    <label>Search radius
+      <div class="radios" id="radius">
+        <button class="chip" type="button" data-r="5">5 mi</button>
+        <button class="chip" type="button" data-r="10">10 mi</button>
+        <button class="chip" type="button" data-r="25">25 mi</button>
+        <button class="chip" type="button" data-r="50">50 mi</button>
+        <button class="chip" type="button" data-r="100">100 mi</button>
+      </div>
+    </label>
+
+    <label for="apiKey">AFDC API key
+      <input id="apiKey" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="DEMO_KEY">
+    </label>
+    <p>Station data comes from the U.S. Department of Energy's <b>Alternative Fuels Data Center</b> (covers the US and Canada). The shared <code>DEMO_KEY</code> allows a few dozen lookups per hour. If you see a rate-limit error, get a free key in about a minute at <a href="https://developer.nrel.gov/signup/" target="_blank" rel="noopener">developer.nrel.gov/signup</a> and paste it here. The key is stored only on this phone.</p>
+
+    <h2>What counts as free</h2>
+    <p>Each station's operator reports a pricing note. This app shows a station when that note says <b>free</b>, <b>no cost</b>, <b>complimentary</b> or <b>$0</b>. Green means the note says nothing else. Amber means the note adds a condition, such as paid parking, a time limit or customers only. Stations with no pricing note are hidden unless you turn on "Show unknown pricing". Always read the sign at the charger before plugging in. Operators change pricing without telling the database.</p>
+
+    <h2>Rivian plug guide</h2>
+    <div class="plugs">
+      <div><code>J1772</code><span>Level 2. Fits every Rivian directly.</span></div>
+      <div><code>CCS</code><span>DC fast. Native port on R1T and R1S.</span></div>
+      <div><code>Tesla / NACS</code><span>Needs a NACS adapter on a CCS-port Rivian. Native on vehicles with a NACS port. Off by default.</span></div>
+      <div><code>Outlets</code><span>NEMA 14-50 and similar wall outlets. Only useful if you carry the portable charger. Off by default.</span></div>
+    </div>
+
+    <h2>Not a guarantee</h2>
+    <p>Listings can be stale, occupied, broken or behind a gate. The status bar shows when the data was fetched. If a refresh fails, the previous results stay on screen but are marked as stale.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+
+  var store = {
+    get: function (k, d) { try { var v = localStorage.getItem('zc.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { localStorage.setItem('zc.' + k, JSON.stringify(v)); } catch (e) {} }
+  };
+
+  var state = {
+    loc: store.get('loc', null),            // {lat, lon, label}
+    radius: store.get('radius', 25),
+    apiKey: store.get('apiKey', ''),
+    power: 'any',
+    plugs: store.get('plugs', { j1772: true, ccs: true, tesla: false, nema: false }),
+    showUnknown: false,
+    stations: [],
+    fetchedAt: null,
+    stale: false,
+    total: 0,
+    fetchedRadius: null,
+    activeId: null
+  };
+
+  // ---------- classification ----------
+  var FREE_RE = /\bfree\b|\bno (?:charge|cost|fee)s?\b|complimentary|\$\s?0(?:\.00)?(?![\d.])|\b0\.00\b/i;
+  var NOT_FREE_RE = /\bnot free\b|\bno longer free\b|\bisn'?t free\b|\bfree parking\b(?![^]*\bfree\b[^]*\bcharg)/i;
+  var COND_RE = /parking|hour|hr\b|min\b|minute|customer|guest|patron|member|validat|while|only|limit|employee|student|resident|tenant|first|donation|except|then|after|\bbut\b|however|fee|permit|register|app\b|account|card|visitor|during|between|weekday|weekend|session|idle/i;
+
+  function classify(st) {
+    var p = (st.ev_pricing || '').trim();
+    if (!p) return 'unknown';
+    if (NOT_FREE_RE.test(p)) return 'paid';
+    if (!FREE_RE.test(p)) return 'paid';
+    return COND_RE.test(p) ? 'cond' : 'free';
+  }
+
+  function plugsOf(st) {
+    var out = {};
+    (st.ev_connector_types || []).forEach(function (t) {
+      t = String(t).toUpperCase();
+      if (t === 'J1772') out.j1772 = true;
+      else if (t === 'J1772COMBO' || t === 'CCS' || t === 'CCS1') out.ccs = true;
+      else if (t === 'TESLA' || t === 'NACS') out.tesla = true;
+      else if (t.indexOf('NEMA') === 0) out.nema = true;
+      else if (t === 'CHADEMO') out.chademo = true;
+      else out.other = true;
+    });
+    return out;
+  }
+
+  var PLUG_LABEL = { j1772: 'J1772', ccs: 'CCS', tesla: 'Tesla/NACS', nema: 'Outlet', chademo: 'CHAdeMO', other: 'Other' };
+
+  function passes(st) {
+    var cls = st._cls;
+    if (cls === 'paid') return false;
+    if (cls === 'unknown' && !state.showUnknown) return false;
+    var dc = (st.ev_dc_fast_num || 0) > 0, l2 = (st.ev_level2_evse_num || 0) > 0;
+    if (state.power === 'dc' && !dc) return false;
+    if (state.power === 'l2' && !l2) return false;
+    var pl = st._plugs, keys = Object.keys(pl);
+    if (keys.length === 0) return true; // plugs unreported: don't hide it
+    return keys.some(function (k) { return state.plugs[k]; });
+  }
+
+  // ---------- map ----------
+  var map = null, markers = null, youMarker = null, markerById = {};
+  var hasLeaflet = typeof window.L !== 'undefined';
+  if (hasLeaflet) {
+    map = L.map('map', { zoomControl: true, attributionControl: true });
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(map);
+    markers = L.layerGroup().addTo(map);
+    map.setView([39.5, -98.35], 4);
+    map.on('click', function (e) {
+      setLocation({ lat: e.latlng.lat, lon: e.latlng.lng, label: 'Dropped pin' });
+    });
+  } else {
+    var m = $('#map');
+    m.className = 'nomap';
+    m.textContent = 'Map unavailable (the map library did not load). The list below still works.';
+  }
+
+  function pinIcon(st) {
+    var dc = (st.ev_dc_fast_num || 0) > 0;
+    var cls = 'pin ' + st._cls + (dc ? ' dc' : '');
+    var n = (st.ev_dc_fast_num || 0) + (st.ev_level2_evse_num || 0);
+    return L.divIcon({ className: '', html: '<div class="' + cls + '"><span>' + (n > 0 ? n : '') + '</span></div>', iconSize: dc ? [32, 32] : [26, 26], iconAnchor: dc ? [16, 32] : [13, 26], popupAnchor: [0, -28] });
+  }
+
+  function renderMap(list) {
+    if (!hasLeaflet) return;
+    markers.clearLayers(); markerById = {};
+    if (state.loc) {
+      if (!youMarker) youMarker = L.marker([state.loc.lat, state.loc.lon], { icon: L.divIcon({ className: '', html: '<div class="you-pin"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), zIndexOffset: 1000, interactive: false }).addTo(map);
+      else youMarker.setLatLng([state.loc.lat, state.loc.lon]);
+    }
+    var bounds = state.loc ? [[state.loc.lat, state.loc.lon]] : [];
+    list.forEach(function (st) {
+      var mk = L.marker([st.latitude, st.longitude], { icon: pinIcon(st) });
+      mk.bindPopup('<b>' + esc(st.station_name) + '</b><br>' + esc(st.ev_pricing || 'Pricing not reported') + '<br>' + fmtDist(st.distance) + ' away');
+      mk.on('click', function () { focusCard(st.id); });
+      mk.addTo(markers); markerById[st.id] = mk;
+      bounds.push([st.latitude, st.longitude]);
+    });
+    if (bounds.length > 1) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 });
+    else if (bounds.length === 1) map.setView(bounds[0], 12);
+  }
+
+  // ---------- list ----------
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function fmtDist(mi) { if (mi == null) return ''; return mi < 10 ? mi.toFixed(1) + ' mi' : Math.round(mi) + ' mi'; }
+  function fmtDate(s) { if (!s) return ''; var d = new Date(s); return isNaN(d) ? s : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+
+  function renderList(list) {
+    var el = $('#list');
+    if (!state.loc) {
+      el.innerHTML = '<div class="empty">Tap the <b>location</b> button, search a place, or tap the map to drop a pin.</div>';
+      return;
+    }
+    if (list.length === 0) {
+      var any = state.stations.length;
+      el.innerHTML = '<div class="empty">' + (any
+        ? '<b>No free chargers match these filters</b> within ' + state.radius + ' mi. Try a wider radius in Settings, another plug type, or turn on unknown pricing.'
+        : '<b>No public chargers reported</b> within ' + state.radius + ' mi of here.') + '</div>';
+      return;
+    }
+    el.innerHTML = list.map(function (st) {
+      var pl = st._plugs, tags = [];
+      if ((st.ev_dc_fast_num || 0) > 0) tags.push('<span class="tag dc">DC fast ×' + st.ev_dc_fast_num + '</span>');
+      if ((st.ev_level2_evse_num || 0) > 0) tags.push('<span class="tag">Level 2 ×' + st.ev_level2_evse_num + '</span>');
+      Object.keys(pl).forEach(function (k) { tags.push('<span class="tag">' + PLUG_LABEL[k] + '</span>'); });
+      if (st.ev_network && st.ev_network !== 'Non-Networked') tags.push('<span class="tag">' + esc(st.ev_network) + '</span>');
+      var label = st._cls === 'free' ? 'Free' : st._cls === 'cond' ? 'Free, with conditions' : 'Pricing not reported';
+      var addr = [st.street_address, st.city, st.state].filter(Boolean).join(', ');
+      var apple = 'https://maps.apple.com/?daddr=' + st.latitude + ',' + st.longitude + '&q=' + encodeURIComponent(st.station_name || 'Charger');
+      var google = 'https://www.google.com/maps/dir/?api=1&destination=' + st.latitude + ',' + st.longitude;
+      var meta = [];
+      if (st.access_days_time) meta.push(esc(st.access_days_time));
+      if (st.date_last_confirmed) meta.push('Confirmed ' + fmtDate(st.date_last_confirmed));
+      return '<article class="card ' + st._cls + (st.id === state.activeId ? ' active' : '') + '" data-id="' + st.id + '">' +
+        '<h3>' + esc(st.station_name) + '</h3>' +
+        '<div class="dist">' + fmtDist(st.distance) + '</div>' +
+        '<div class="addr">' + esc(addr) + '</div>' +
+        '<div class="price"><b>' + label + '</b>' + (st.ev_pricing && st.ev_pricing.trim().toLowerCase() !== label.toLowerCase() ? ' · ' + esc(st.ev_pricing) : '') + '</div>' +
+        '<div class="tags">' + tags.join('') + '</div>' +
+        (meta.length ? '<div class="meta">' + meta.join(' · ') + '</div>' : '') +
+        '<div class="actions"><a class="primary" href="' + apple + '" target="_blank" rel="noopener">Apple Maps</a><a href="' + google + '" target="_blank" rel="noopener">Google Maps</a></div>' +
+        '</article>';
+    }).join('');
+  }
+
+  function focusCard(id) {
+    state.activeId = id;
+    $$('.card').forEach(function (c) { c.classList.toggle('active', Number(c.dataset.id) === id); });
+    var c = document.querySelector('.card[data-id="' + id + '"]');
+    if (c) c.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+  $('#list').addEventListener('click', function (e) {
+    var card = e.target.closest('.card'); if (!card || e.target.closest('a')) return;
+    var id = Number(card.dataset.id); focusCard(id);
+    if (hasLeaflet && markerById[id]) { map.panTo(markerById[id].getLatLng()); markerById[id].openPopup(); }
+  });
+
+  // ---------- status ----------
+  function setStatus(html, kind) {
+    var s = $('#status'); s.className = 'status' + (kind ? ' ' + kind : ''); s.innerHTML = html;
+  }
+  function timeStr(d) { return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); }
+
+  function renderAll() {
+    var list = state.stations.filter(passes).sort(function (a, b) { return (a.distance || 0) - (b.distance || 0); });
+    renderList(list); renderMap(list);
+    if (state.fetchedAt) {
+      var free = state.stations.filter(function (s) { return s._cls === 'free' || s._cls === 'cond'; }).length;
+      var html = '<span><span class="count">' + list.length + '</span> shown · ' + free + ' free of ' + state.stations.length + ' public chargers within ' + (state.fetchedRadius || state.radius) + ' mi</span>' +
+        '<span>' + (state.stale ? 'STALE · from ' : 'Fetched ') + timeStr(state.fetchedAt) + (state.loc && state.loc.label ? ' · ' + esc(state.loc.label) : '') + '</span>' +
+        (state.total > state.stations.length ? '<span>Nearest ' + state.stations.length + ' of ' + state.total + ' returned; shrink the radius to see them all.</span>' : '');
+      setStatus(html, state.stale ? 'stale' : '');
+    }
+  }
+
+  // ---------- data ----------
+  var inflight = null;
+  function fetchStations() {
+    if (!state.loc) return;
+    var key = (state.apiKey || 'DEMO_KEY').trim();
+    var url = 'https://developer.nrel.gov/api/alt-fuel-stations/v1/nearest.json?api_key=' + encodeURIComponent(key) +
+      '&fuel_type=ELEC&access=public&status=E&limit=200&radius=' + state.radius +
+      '&latitude=' + state.loc.lat + '&longitude=' + state.loc.lon;
+    setStatus('<span>Looking for chargers within ' + state.radius + ' mi of ' + esc(state.loc.label || 'here') + '…</span>');
+    if (inflight) inflight.abort();
+    var ctl = inflight = new AbortController();
+    fetch(url, { signal: ctl.signal }).then(function (r) {
+      if (r.status === 429) throw new Error('rate');
+      if (r.status === 403) throw new Error('key');
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.json();
+    }).then(function (data) {
+      if (ctl !== inflight) return;
+      var list = data.fuel_stations || [];
+      list.forEach(function (st) { st._cls = classify(st); st._plugs = plugsOf(st); });
+      state.stations = list; state.total = data.total_results || list.length;
+      state.fetchedAt = new Date(); state.stale = false; state.fetchedRadius = state.radius;
+      renderAll();
+    }).catch(function (err) {
+      if (err.name === 'AbortError') return;
+      var msg = err.message === 'rate' ? 'Rate limit hit on the shared DEMO_KEY. Add your own free key in Settings.' :
+        err.message === 'key' ? 'The API key was rejected. Check it in Settings.' :
+        'Could not reach the charger database (' + esc(err.message) + '). Check your connection.';
+      if (state.fetchedAt) { state.stale = true; renderAll(); setStatus($('#status').innerHTML + '<span>' + msg + '</span>', 'stale'); }
+      else { setStatus('<span>' + msg + '</span>', 'err'); renderList([]); }
+    });
+  }
+
+  function setLocation(loc) {
+    state.loc = loc; store.set('loc', loc);
+    state.activeId = null;
+    if (hasLeaflet) map.setView([loc.lat, loc.lon], Math.max(map.getZoom(), 11));
+    fetchStations();
+  }
+
+  function locate() {
+    if (!navigator.geolocation) { setStatus('<span>This browser does not offer location. Search a place instead.</span>', 'err'); return; }
+    setStatus('<span>Finding your location…</span>');
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      setLocation({ lat: +pos.coords.latitude.toFixed(5), lon: +pos.coords.longitude.toFixed(5), label: 'My location' });
+    }, function (e) {
+      setStatus('<span>Location unavailable (' + esc(e.message || 'denied') + '). Search a place or tap the map.</span>', 'err');
+    }, { enableHighAccuracy: false, timeout: 12000, maximumAge: 120000 });
+  }
+
+  function geocode(q) {
+    setStatus('<span>Searching for “' + esc(q) + '”…</span>');
+    var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us,ca&q=' + encodeURIComponent(q);
+    fetch(url, { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json(); }).then(function (res) {
+      if (!res || !res.length) { setStatus('<span>No place found for “' + esc(q) + '”. Try adding a state or province.</span>', 'err'); return; }
+      var hit = res[0];
+      setLocation({ lat: +(+hit.lat).toFixed(5), lon: +(+hit.lon).toFixed(5), label: (hit.display_name || q).split(',').slice(0, 2).join(',') });
+    }).catch(function () { setStatus('<span>Place search failed. Check your connection, or tap the map to drop a pin.</span>', 'err'); });
+  }
+
+  // ---------- controls ----------
+  $('#searchForm').addEventListener('submit', function (e) { e.preventDefault(); var q = $('#q').value.trim(); if (q) geocode(q); $('#q').blur(); });
+  $('#locBtn').addEventListener('click', locate);
+
+  $$('.rail .chip[data-power]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      state.power = b.dataset.power;
+      $$('.rail .chip[data-power]').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+      renderAll();
+    });
+  });
+  $$('.rail .chip[data-plug]').forEach(function (b) {
+    b.setAttribute('aria-pressed', String(!!state.plugs[b.dataset.plug]));
+    b.addEventListener('click', function () {
+      state.plugs[b.dataset.plug] = !state.plugs[b.dataset.plug];
+      b.setAttribute('aria-pressed', String(state.plugs[b.dataset.plug]));
+      store.set('plugs', state.plugs); renderAll();
+    });
+  });
+  $('.rail .chip[data-unknown]').addEventListener('click', function () {
+    state.showUnknown = !state.showUnknown;
+    this.setAttribute('aria-pressed', String(state.showUnknown)); renderAll();
+  });
+
+  var sheet = $('#sheet');
+  $('#settingsBtn').addEventListener('click', function () { sheet.classList.add('open'); });
+  $('#closeSheet').addEventListener('click', function () { sheet.classList.remove('open'); });
+  sheet.addEventListener('click', function (e) { if (e.target === sheet) sheet.classList.remove('open'); });
+
+  function paintRadius() { $$('#radius .chip').forEach(function (b) { b.setAttribute('aria-pressed', String(Number(b.dataset.r) === state.radius)); }); }
+  paintRadius();
+  $$('#radius .chip').forEach(function (b) {
+    b.addEventListener('click', function () { state.radius = Number(b.dataset.r); store.set('radius', state.radius); paintRadius(); fetchStations(); });
+  });
+  var keyInput = $('#apiKey'); keyInput.value = state.apiKey;
+  keyInput.addEventListener('change', function () { state.apiKey = keyInput.value.trim(); store.set('apiKey', state.apiKey); fetchStations(); });
+
+  // expose for tests
+  window.__zc = { classify: classify, plugsOf: plugsOf, state: state };
+
+  // ---------- boot ----------
+  renderList([]);
+  if (state.loc) { if (hasLeaflet) map.setView([state.loc.lat, state.loc.lon], 11); fetchStations(); }
+  else locate();
+})();
+</script>
+</body>
+</html>
