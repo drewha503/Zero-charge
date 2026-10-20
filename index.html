@@ -236,6 +236,10 @@ main {
     <label for="apiKey">AFDC API key
       <input id="apiKey" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="DEMO_KEY">
     </label>
+    <label for="ocmKey">Open Charge Map key (backup database)
+      <input id="ocmKey" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="optional">
+    </label>
+    <p>If the government database cannot be reached, the app falls back to <b>Open Charge Map</b>, a community database. It works without a key for light use; a free key from <a href="https://openchargemap.org/site/profile/applications">openchargemap.org</a> lifts its limits. The status line names which database answered.</p>
     <p>Shortcut: open the app once with your key in the link, like <code>…/Zero-charge/?key=YOURKEY</code>, and it is saved here automatically.</p>
     <p>Station data comes from the U.S. Department of Energy's <b>Alternative Fuels Data Center</b> (covers the US and Canada). The shared <code>DEMO_KEY</code> allows a few dozen lookups per hour. If you see a rate-limit error, get a free key in about a minute at <a href="https://developer.nrel.gov/signup/" target="_blank" rel="noopener">developer.nrel.gov/signup</a> and paste it here. The key is stored only on this phone.</p>
 
@@ -283,6 +287,8 @@ main {
     loc: store.get('loc', null),            // {lat, lon, label}
     radius: store.get('radius', 25),
     apiKey: store.get('apiKey', DEFAULT_KEY),
+    ocmKey: store.get('ocmKey', ''),
+    source: null,
     power: 'any',
     plugs: store.get('plugs', { j1772: true, ccs: true, tesla: false, nema: false }),
     showUnknown: false,
@@ -448,7 +454,7 @@ main {
     if (state.fetchedAt) {
       var free = state.stations.filter(function (s) { return s._cls === 'free' || s._cls === 'cond'; }).length;
       var html = '<span><span class="count">' + list.length + '</span> <span class="eyebrow">free spots</span> · ' + free + ' free of ' + state.stations.length + ' public within ' + (state.fetchedRadius || state.radius) + ' mi</span>' +
-        '<span>' + (state.stale ? 'STALE · from ' : 'Fetched ') + timeStr(state.fetchedAt) + (state.loc && state.loc.label ? ' · ' + esc(state.loc.label) : '') + '</span>' +
+        '<span>' + (state.stale ? 'STALE · from ' : 'Fetched ') + timeStr(state.fetchedAt) + (state.loc && state.loc.label ? ' · ' + esc(state.loc.label) : '') + (state.source ? ' · ' + state.source : '') + '</span>' +
         (state.total > state.stations.length ? '<span>Nearest ' + state.stations.length + ' of ' + state.total + ' returned; shrink the radius to see them all.</span>' : '');
       setStatus(html, state.stale ? 'stale' : '');
     }
@@ -465,6 +471,38 @@ main {
       s.onerror = function () { if (done) return; cleanup(); reject(new Error('script blocked')); };
       s.src = url + '&callback=' + cb;
       document.head.appendChild(s);
+    });
+  }
+
+  // Open Charge Map adapter: reshapes its POI records into the AFDC station shape the rest of the app reads.
+  var OCM_TYPES = { 1: 'J1772', 32: 'J1772COMBO', 27: 'TESLA', 30: 'TESLA', 2: 'CHADEMO', 9: 'NEMA520', 22: 'NEMA515', 15: 'NEMA1450' };
+  function fromOCM(poi) {
+    var a = poi.AddressInfo || {}, types = {}, dc = 0, l2 = 0;
+    (poi.Connections || []).forEach(function (c) {
+      var t = OCM_TYPES[c.ConnectionTypeID]; if (t) types[t] = true;
+      var q = c.Quantity || 1;
+      if (c.LevelID === 3) dc += q; else if (c.LevelID === 2) l2 += q;
+    });
+    return {
+      id: poi.ID, station_name: a.Title || 'Charger', ev_pricing: poi.UsageCost || null,
+      ev_connector_types: Object.keys(types), ev_dc_fast_num: dc || null, ev_level2_evse_num: l2 || null,
+      distance: a.Distance, latitude: a.Latitude, longitude: a.Longitude,
+      street_address: a.AddressLine1 || '', city: a.Town || '', state: a.StateOrProvince || '',
+      ev_network: null, access_days_time: a.AccessComments || null, date_last_confirmed: poi.DateLastVerified || null
+    };
+  }
+  function fetchOCM(signal) {
+    var url = 'https://api.openchargemap.io/v3/poi/?output=json&compact=true&verbose=false&maxresults=200&distanceunit=Miles' +
+      '&distance=' + state.radius + '&latitude=' + state.loc.lat + '&longitude=' + state.loc.lon +
+      (state.ocmKey ? '&key=' + encodeURIComponent(state.ocmKey) : '');
+    return fetch(url, { signal: signal }).then(function (r) {
+      if (r.status === 429) throw new Error('rate');
+      if (r.status === 401 || r.status === 403) throw new Error('ocmkey');
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.json();
+    }).then(function (pois) {
+      var list = (pois || []).filter(function (p) { return !p.StatusTypeID || p.StatusTypeID < 100; }).map(fromOCM);
+      return { fuel_stations: list, total_results: list.length, source: 'Open Charge Map' };
     });
   }
 
@@ -490,8 +528,13 @@ main {
         if (data && data.error) throw new Error(/RATE/i.test(data.error.code || '') ? 'rate' : 'key');
         return data;
       }).catch(function (e2) { throw new Error(e2.message === 'timeout' || e2.message === 'script blocked' ? 'unreachable' : e2.message); });
+    }).then(function (data) { data.source = 'NREL AFDC'; return data; }).catch(function (err) {
+      if (err.name === 'AbortError') throw err;
+      // The primary database failed outright: try Open Charge Map before giving up.
+      return fetchOCM(ctl.signal).catch(function (e3) { if (e3.name === 'AbortError') throw e3; throw err; });
     }).then(function (data) {
       if (ctl !== inflight) return;
+      state.source = data.source;
       var list = data.fuel_stations || [];
       list.forEach(function (st) { st._cls = classify(st); st._plugs = plugsOf(st); });
       state.stations = list; state.total = data.total_results || list.length;
@@ -501,7 +544,8 @@ main {
       if (err.name === 'AbortError') return;
       var msg = err.message === 'rate' ? 'Rate limit hit on the shared DEMO_KEY. Add your own free key in Settings.' :
         err.message === 'key' ? 'The API key was rejected. Check it in Settings.' :
-        err.message === 'unreachable' ? 'Your network could not reach developer.nrel.gov. Try cellular instead of Wi-Fi. <a href="' + testUrl + '" target="_blank" rel="noopener">Test the database link</a>.' :
+        err.message === 'ocmkey' ? 'Open Charge Map rejected the request. Add a free Open Charge Map key in Settings.' :
+        err.message === 'unreachable' ? 'Your network could not reach developer.nrel.gov. Try cellular instead of Wi-Fi. <a href="' + testUrl + '">Test the database link</a>.' :
         'Could not reach the charger database (' + esc(err.message) + '). Check your connection.';
       if (state.fetchedAt) { state.stale = true; renderAll(); setStatus($('#status').innerHTML + '<span>' + msg + '</span>', 'stale'); }
       else { setStatus('<span>' + msg + '</span>', 'err'); $('#list').innerHTML = '<div class="empty"><b>Nothing loaded yet.</b> Fix the connection above, then search again or tap the map.</div>'; }
@@ -571,6 +615,8 @@ main {
   });
   var keyInput = $('#apiKey'); keyInput.value = state.apiKey;
   keyInput.addEventListener('change', function () { state.apiKey = keyInput.value.trim(); store.set('apiKey', state.apiKey); fetchStations(); });
+  var ocmInput = $('#ocmKey'); ocmInput.value = state.ocmKey;
+  ocmInput.addEventListener('change', function () { state.ocmKey = ocmInput.value.trim(); store.set('ocmKey', state.ocmKey); fetchStations(); });
 
   // expose for tests
   window.__zc = { classify: classify, plugsOf: plugsOf, state: state };
